@@ -57,4 +57,12 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+
+    // TFLite interpreter
+    implementation("org.tensorflow:tensorflow-lite:2.13.0")
+// Pour modèles quantifiés (int8, float16…)
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.3")
+// (facultatif, utile si tu veux faire du prétraitement audio plus tard)
+    implementation("org.tensorflow:tensorflow-lite-task-audio:0.4.3")
 }
