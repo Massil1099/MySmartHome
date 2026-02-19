@@ -6,31 +6,37 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import fr.mastersid.massil_andrianina.mysmarthome.data.model.TFLiteKeywordDetector
 import fr.mastersid.massil_andrianina.mysmarthome.ui.theme.MySmartHomeTheme
+
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val detector = TFLiteKeywordDetector(this)
+        val predicted = detector.runTestFromJson(this)
 
-        enableEdgeToEdge()
         setContent {
             MySmartHomeTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                    Surface {
-                        Text("Modèle chargé, check Logcat")
+                Scaffold(
+                    modifier = Modifier.fillMaxSize()
+                ) { innerPadding ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    ) {
+                        MySmartHomeScreen(predicted = predicted)
                     }
                 }
             }
@@ -39,17 +45,18 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
+fun MySmartHomeScreen(predicted: Int) {
     Text(
-        text = "Hello $name!",
-        modifier = modifier
+        text = "Mot détecté : $predicted",
+        style = MaterialTheme.typography.headlineSmall,
+        modifier = Modifier.padding(16.dp)
     )
 }
 
 @Preview(showBackground = true)
 @Composable
-fun GreetingPreview() {
+fun PreviewMySmartHome() {
     MySmartHomeTheme {
-        Greeting("Android")
+        MySmartHomeScreen(predicted = 3)
     }
 }

@@ -65,4 +65,7 @@ dependencies {
     implementation("org.tensorflow:tensorflow-lite-support:0.4.3")
 // (facultatif, utile si tu veux faire du prétraitement audio plus tard)
     implementation("org.tensorflow:tensorflow-lite-task-audio:0.4.3")
+
+    implementation("com.github.wendykierp:JTransforms:3.1")
+
 }
