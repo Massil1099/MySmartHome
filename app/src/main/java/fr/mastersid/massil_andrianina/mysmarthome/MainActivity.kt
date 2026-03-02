@@ -3,41 +3,24 @@ package fr.mastersid.massil_andrianina.mysmarthome
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import fr.mastersid.massil_andrianina.mysmarthome.data.model.TFLiteKeywordDetector
-import fr.mastersid.massil_andrianina.mysmarthome.ui.theme.MySmartHomeTheme
-
-
+import fr.mastersid.massil_andrianina.mysmarthome.network.Esp32HttpClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val detector = TFLiteKeywordDetector(this)
-        val predicted = detector.runTestFromJson(this)
-
         setContent {
-            MySmartHomeTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize()
-                ) { innerPadding ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                    ) {
-                        MySmartHomeScreen(predicted = predicted)
-                    }
+            MaterialTheme {
+                Surface(Modifier.fillMaxSize()) {
+                    WifiCommandScreen()
                 }
             }
         }
@@ -45,18 +28,49 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun MySmartHomeScreen(predicted: Int) {
-    Text(
-        text = "Mot détecté : $predicted",
-        style = MaterialTheme.typography.headlineSmall,
-        modifier = Modifier.padding(16.dp)
-    )
-}
+fun WifiCommandScreen() {
+    var ip by remember { mutableStateOf("192.168.4.1") }
+    var status by remember { mutableStateOf("Prêt") }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-@Preview(showBackground = true)
-@Composable
-fun PreviewMySmartHome() {
-    MySmartHomeTheme {
-        MySmartHomeScreen(predicted = 3)
+    fun send(cmd: String) {
+        scope.launch {
+            loading = true
+            status = "Envoi: $cmd ..."
+            val res = withContext(Dispatchers.IO) {
+                Esp32HttpClient.sendCommand(ip, cmd)
+            }
+            status = res.fold(
+                onSuccess = { "Réponse: $it" },
+                onFailure = { "Erreur: ${it.message ?: it.javaClass.simpleName}" }
+            )
+            loading = false
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("Test Wi-Fi ESP32 (Hotspot)", style = MaterialTheme.typography.headlineSmall)
+
+        OutlinedTextField(
+            value = ip,
+            onValueChange = { ip = it },
+            label = { Text("IP ESP32") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { send("on") }, enabled = !loading) { Text("ON") }
+            Button(onClick = { send("off") }, enabled = !loading) { Text("OFF") }
+        }
+
+        if (loading) CircularProgressIndicator()
+
+        Text(status)
+        Text("URL: http://$ip/cmd?value=on|off", style = MaterialTheme.typography.bodySmall)
     }
 }
