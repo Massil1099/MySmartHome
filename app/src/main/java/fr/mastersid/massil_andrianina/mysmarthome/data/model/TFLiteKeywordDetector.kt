@@ -29,6 +29,12 @@ class TFLiteKeywordDetector(context: Context) {
         return best
     }
 
+
+    fun predictLabel(input: Array<Array<Array<FloatArray>>>): String {
+        val idx = predict(input)
+        return Labels.LIST.getOrElse(idx) { "inconnu" }
+    }
+
     private fun loadModelFile(context: Context, modelName: String): MappedByteBuffer {
         val fd = context.assets.openFd(modelName)
         FileInputStream(fd.fileDescriptor).channel.use { channel ->
