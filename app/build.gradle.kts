@@ -68,5 +68,7 @@ dependencies {
 
     implementation("com.github.wendykierp:JTransforms:3.1")
 
+    implementation(libs.androidx.navigation.compose)
+
 
 }

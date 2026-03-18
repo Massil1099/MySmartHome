@@ -1,139 +1,100 @@
 package fr.mastersid.massil_andrianina.mysmarthome
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import fr.mastersid.massil_andrianina.mysmarthome.data.model.TFLiteKeywordDetector
-import fr.mastersid.massil_andrianina.mysmarthome.network.Esp32HttpClient
-import fr.mastersid.massil_andrianina.mysmarthome.voice.AudioRecorder
-import fr.mastersid.massil_andrianina.mysmarthome.voice.StftLogFeatureExtractor
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import fr.mastersid.massil_andrianina.mysmarthome.ui.theme.MySmartHomeTheme
 
 class MainActivity : ComponentActivity() {
-
-    private val requestMicPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* Géré via Compose */ }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val detector = TFLiteKeywordDetector(this)
-        val recorder = AudioRecorder(16000)
-        val extractor = StftLogFeatureExtractor()
-
         setContent {
-            val scope = rememberCoroutineScope()
+            MySmartHomeTheme {
+                val navController = rememberNavController()
+                val state = remember { VoiceCommandState() }
 
-            var hasMic by remember { mutableStateOf(checkMicPermission()) }
-            var ip by remember { mutableStateOf("192.168.4.1") }
-            var isListening by remember { mutableStateOf(false) }
-            var prediction by remember { mutableStateOf("—") }
-            var status by remember { mutableStateOf("Prêt") }
-
-            LaunchedEffect(Unit) {
-                hasMic = checkMicPermission()
-            }
-
-            fun askMic() {
-                requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
-            }
-
-            fun sendToESP32(cmd: String) {
-                scope.launch {
-                    status = "Envoi: $cmd"
-                    val res = withContext(Dispatchers.IO) {
-                        Esp32HttpClient.sendCommand(ip, cmd)
+                NavHost(navController = navController, startDestination = "room") {
+                    composable("room") {
+                        VoiceStepScreen(
+                            title = "Prononcez la pièce",
+                            label = state.roomLabel,
+                            onRecognize = { state.roomLabel = it },
+                            onNext = { navController.navigate("object") }
+                        )
                     }
-                    status = res.fold(
-                        onSuccess = { "Réponse ESP32: $it" },
-                        onFailure = { "Erreur ESP32: ${it.message}" }
-                    )
-                }
-            }
-
-            fun listenAndPredict() {
-                if (!hasMic) {
-                    askMic()
-                    return
-                }
-
-                scope.launch {
-                    isListening = true
-                    prediction = "..."
-                    status = "Écoute 1s"
-
-                    try {
-                        val pcm = withContext(Dispatchers.Default) {
-                            recorder.recordOneSecondPcm16()
-                        }
-                        val floats = recorder.pcm16ToFloat(pcm)
-                        val features = extractor.extract(floats)
-                        val label = detector.predictLabel(features)
-                        prediction = label
-
-                        if (label == "on" || label == "off") {
-                            sendToESP32(label)
-                        } else {
-                            status = "Commande non reconnue"
-                        }
-
-                    } catch (e: Exception) {
-                        prediction = "Erreur"
-                        status = e.message ?: "Erreur inconnue"
-                    } finally {
-                        isListening = false
+                    composable("object") {
+                        VoiceStepScreen(
+                            title = "Prononcez l'objet",
+                            label = state.objectLabel,
+                            onRecognize = { state.objectLabel = it },
+                            onNext = { navController.navigate("action") }
+                        )
                     }
-                }
-            }
-
-            Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("Commande vocale ESP32", style = MaterialTheme.typography.headlineSmall)
-
-                    OutlinedTextField(
-                        value = ip,
-                        onValueChange = { ip = it },
-                        label = { Text("IP ESP32") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Button(
-                        onClick = { listenAndPredict() },
-                        enabled = !isListening,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (isListening) "Écoute..." else "Parler 1s")
+                    composable("action") {
+                        VoiceStepScreen(
+                            title = "Prononcez l'action",
+                            label = state.actionLabel,
+                            onRecognize = { state.actionLabel = it },
+                            onNext = {
+                                // Tu peux ici déclencher l'envoi à l'ESP32
+                            }
+                        )
                     }
-
-                    Text("Prédiction : $prediction")
-                    Text("Statut : $status")
                 }
             }
         }
     }
+}
 
-    private fun checkMicPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
+@Composable
+fun VoiceStepScreen(
+    title: String,
+    label: String,
+    onRecognize: (String) -> Unit,
+    onNext: () -> Unit
+) {
+    var isListening by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+
+        Button(
+            onClick = {
+                isListening = true
+                // À connecter avec reconnaissance audio réelle
+                // Ici on simule un mot reconnu :
+                onRecognize("on")
+                isListening = false
+            },
+            enabled = !isListening
+        ) {
+            Text(if (isListening) "Écoute..." else "Parler")
+        }
+
+        Text("Reconnu : $label")
+
+        Button(onClick = onNext, enabled = label.isNotBlank()) {
+            Text("Suivant")
+        }
     }
+}
+
+class VoiceCommandState {
+    var roomLabel by mutableStateOf("")
+    var objectLabel by mutableStateOf("")
+    var actionLabel by mutableStateOf("")
 }
