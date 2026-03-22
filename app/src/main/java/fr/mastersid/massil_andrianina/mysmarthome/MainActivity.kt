@@ -330,9 +330,9 @@ fun mapRoomLabel(label: String): String? = when (label) {
 }
 
 fun mapObjectLabel(label: String): String? = when (label) {
-    "one" -> "led"
-    "two" -> "led"
-    "three" -> "led"
+    "one" -> "led1"
+    "two" -> "led2"
+    "three" -> "led3"
     else -> null
 }
 
