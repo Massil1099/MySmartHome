@@ -38,38 +38,47 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 
+// Option générique affichée dans l'interface
 data class UiOption(
     val rawLabel: String,
-    val displayName: String
+    val displayName: String,
+    val mappedName: String
 )
 
+// Option de pièce avec ses objets
 data class RoomUiOption(
     val rawLabel: String,
     val displayName: String,
+    val mappedName: String,
     val objects: List<UiOption>
 )
 
+// Objets disponibles
 private val LED_OPTIONS = listOf(
-    UiOption("one", "led1"),
-    UiOption("two", "led2"),
-    UiOption("three", "led3")
+    UiOption("one", "One", "led1"),
+    UiOption("two", "Two", "led2"),
+    UiOption("three", "Three", "led3")
 )
 
+// Actions disponibles
 private val ACTION_OPTIONS = listOf(
-    UiOption("on", "ON"),
-    UiOption("off", "OFF")
+    UiOption("on", "On", "allumer"),
+    UiOption("off", "Off", "éteindre")
 )
 
+// Pièces disponibles
 private val ROOM_OPTIONS = listOf(
-    RoomUiOption("marvin", "Salon", LED_OPTIONS),
-    RoomUiOption("house", "Cuisine", LED_OPTIONS),
-    RoomUiOption("bed", "Chambre", LED_OPTIONS)
+    RoomUiOption("marvin", "Marvin", "salon", LED_OPTIONS),
+    RoomUiOption("house", "House", "cuisine", LED_OPTIONS),
+    RoomUiOption("bed", "Bed", "chambre", LED_OPTIONS)
 )
 
 class MainActivity : ComponentActivity() {
 
+    // État permission micro
     private var micPermissionGranted by mutableStateOf(false)
 
+    // Demande permission micro
     private val requestMicPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -79,23 +88,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Vérifie la permission au lancement
         micPermissionGranted = checkMicPermission()
 
+        // Audio + extraction features
         val recorder = AudioRecorder(16000)
         val extractor = StftLogFeatureExtractor()
 
+        // Modèle pièce
         val detectorRoom = TFLiteKeywordDetector(
             context = this,
             modelName = "rooms_model_pruned_int8.tflite",
             labels = Labels.ROOMS
         )
 
+        // Modèle objet
         val detectorObject = TFLiteKeywordDetector(
             context = this,
             modelName = "objects_model_pruned_int8.tflite",
             labels = Labels.OBJECTS
         )
 
+        // Modèle action
         val detectorAction = TFLiteKeywordDetector(
             context = this,
             modelName = "actions_model_pruned_int8.tflite",
@@ -104,19 +118,24 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MySmartHomeTheme {
+                // Contrôle navigation
                 val navController = rememberNavController()
                 val scope = rememberCoroutineScope()
 
+                // IP ESP32 et texte d'état
                 var ip by remember { mutableStateOf("192.168.4.1") }
                 var status by remember { mutableStateOf("Prêt") }
 
+                // État global de la commande
                 val state = remember { VoiceCommandState() }
                 val hasMicPermission = micPermissionGranted
 
+                // Lance la demande permission
                 fun askMicPermission() {
                     requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
 
+                // Enregistre puis extrait les features audio
                 suspend fun recordAndExtractInput(): Array<Array<Array<FloatArray>>> {
                     val pcm = withContext(Dispatchers.Default) {
                         recorder.recordOneSecondPcm16()
@@ -129,6 +148,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Envoie la commande HTTP à l'ESP32
                 fun sendCommandToEsp32(
                     roomLabel: String,
                     objectLabel: String,
@@ -136,30 +156,36 @@ class MainActivity : ComponentActivity() {
                 ) {
                     scope.launch {
                         try {
+                            // Convertit labels -> valeurs utiles
                             val room = mapRoomLabel(roomLabel)
                             val obj = mapObjectLabel(objectLabel)
                             val action = mapActionLabel(actionLabel)
 
+                            // Vérifie commande complète
                             if (room == null || obj == null || action == null) {
                                 status = "Commande incomplète ou invalide"
                                 return@launch
                             }
 
+                            // Encode les paramètres URL
                             val encodedRoom = URLEncoder.encode(room, "UTF-8")
                             val encodedObject = URLEncoder.encode(obj, "UTF-8")
                             val encodedAction = URLEncoder.encode(action, "UTF-8")
 
+                            // URL finale
                             val url =
                                 "http://$ip/cmd?room=$encodedRoom&object=$encodedObject&action=$encodedAction"
 
                             status = "Envoi..."
 
+                            // Requête HTTP GET
                             val response = withContext(Dispatchers.IO) {
                                 val conn = URL(url).openConnection() as HttpURLConnection
                                 conn.connectTimeout = 4000
                                 conn.readTimeout = 4000
                                 conn.requestMethod = "GET"
 
+                                // Lit réponse normale ou erreur
                                 val stream = try {
                                     conn.inputStream
                                 } catch (_: Exception) {
@@ -180,6 +206,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Structure générale de l'écran
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     Column(
                         modifier = Modifier
@@ -188,6 +215,7 @@ class MainActivity : ComponentActivity() {
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        // Champ IP
                         OutlinedTextField(
                             value = ip,
                             onValueChange = { ip = it },
@@ -195,13 +223,16 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        Text("Statut: $status")
+                        // Texte d'état
+                        Text("Statut : $status")
 
+                        // Navigation entre les 3 pages
                         NavHost(
                             navController = navController,
                             startDestination = "room",
                             modifier = Modifier.weight(1f)
                         ) {
+                            // Écran pièce
                             composable("room") {
                                 RoomSelectionScreen(
                                     state = state,
@@ -212,8 +243,7 @@ class MainActivity : ComponentActivity() {
                                         state.roomLabel = detectorRoom.predictLabel(input)
                                         state.objectLabel = ""
                                         state.actionLabel = ""
-                                        status =
-                                            "Pièce reconnue: ${displayRoomLabel(state.roomLabel)}"
+                                        status = "Pièce reconnue : ${displayRoomLabel(state.roomLabel)}"
                                     },
                                     onNext = {
                                         navController.navigate("object")
@@ -221,6 +251,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
+                            // Écran objet
                             composable("object") {
                                 ObjectSelectionScreen(
                                     state = state,
@@ -230,8 +261,7 @@ class MainActivity : ComponentActivity() {
                                         val input = recordAndExtractInput()
                                         state.objectLabel = detectorObject.predictLabel(input)
                                         state.actionLabel = ""
-                                        status =
-                                            "Objet reconnu: ${displayObjectLabel(state.objectLabel)}"
+                                        status = "Objet reconnu : ${displayObjectLabel(state.objectLabel)}"
                                     },
                                     onNext = {
                                         navController.navigate("action")
@@ -239,6 +269,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
+                            // Écran action
                             composable("action") {
                                 ActionSelectionScreen(
                                     state = state,
@@ -247,8 +278,7 @@ class MainActivity : ComponentActivity() {
                                     onRecognize = {
                                         val input = recordAndExtractInput()
                                         state.actionLabel = detectorAction.predictLabel(input)
-                                        status =
-                                            "Action reconnue: ${displayActionLabel(state.actionLabel)}"
+                                        status = "Action reconnue : ${displayActionLabel(state.actionLabel)}"
                                     },
                                     onSend = {
                                         sendCommandToEsp32(
@@ -266,6 +296,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Vérifie permission micro
     private fun checkMicPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
             this,
@@ -292,22 +323,26 @@ fun RoomSelectionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Titre écran 1
             Text(
                 text = "Choisissez une pièce",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                style = MaterialTheme.typography.headlineSmall
             )
 
+            // Mot reconnu
             RecognizedWordCard(
                 title = "Pièce reconnue",
-                value = if (state.roomLabel.isBlank()) "Aucune" else displayRoomLabel(state.roomLabel),
+                value = if (state.roomLabel.isBlank()) "Aucune"
+                else displayRoomLabel(state.roomLabel),
                 isSupported = mapRoomLabel(state.roomLabel) != null || state.roomLabel.isBlank()
             )
 
+            // Liste des pièces
             ROOM_OPTIONS.forEach { room ->
                 RoomCard(
                     title = room.displayName,
-                    objects = room.objects.map { it.displayName },
+                    mappedName = room.mappedName,
+                    objects = room.objects,
                     selected = state.roomLabel == room.rawLabel,
                     onClick = {
                         state.roomLabel = room.rawLabel
@@ -318,6 +353,7 @@ fun RoomSelectionScreen(
             }
         }
 
+        // Boutons du bas
         BottomButtonsRow(
             hasMicPermission = hasMicPermission,
             isListening = isListening,
@@ -349,7 +385,6 @@ fun ObjectSelectionScreen(
 ) {
     val scope = rememberCoroutineScope()
     var isListening by remember { mutableStateOf(false) }
-
     val selectedRoom = ROOM_OPTIONS.find { it.rawLabel == state.roomLabel }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -359,27 +394,33 @@ fun ObjectSelectionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Titre avec pièce choisie
             Text(
-                text = selectedRoom?.displayName ?: "Pièce non sélectionnée",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                text = selectedRoom?.let { "${it.displayName} (${it.mappedName})" }
+                    ?: "Pièce non sélectionnée",
+                style = MaterialTheme.typography.headlineSmall
             )
 
+            // Sous-titre
             Text(
                 text = "Choisissez un objet",
                 style = MaterialTheme.typography.titleMedium
             )
 
+            // Objet reconnu
             RecognizedWordCard(
                 title = "Objet reconnu",
-                value = if (state.objectLabel.isBlank()) "Aucun" else displayObjectLabel(state.objectLabel),
+                value = if (state.objectLabel.isBlank()) "Aucun"
+                else displayObjectLabel(state.objectLabel),
                 isSupported = mapObjectLabel(state.objectLabel) != null || state.objectLabel.isBlank()
             )
 
+            // Liste des objets
             (selectedRoom?.objects ?: LED_OPTIONS).forEach { obj ->
                 SelectableCard(
                     title = obj.displayName,
-                    subtitle = "Objet disponible dans ${selectedRoom?.displayName ?: "la pièce"}",
+                    mappedName = obj.mappedName,
+                    subtitle = "Objet disponible",
                     selected = state.objectLabel == obj.rawLabel,
                     onClick = {
                         state.objectLabel = obj.rawLabel
@@ -389,6 +430,7 @@ fun ObjectSelectionScreen(
             }
         }
 
+        // Boutons du bas
         BottomButtonsRow(
             hasMicPermission = hasMicPermission,
             isListening = isListening,
@@ -421,9 +463,6 @@ fun ActionSelectionScreen(
     val scope = rememberCoroutineScope()
     var isListening by remember { mutableStateOf(false) }
 
-    val roomTitle = displayRoomLabel(state.roomLabel)
-    val objectTitle = displayObjectLabel(state.objectLabel)
-
     Column(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -431,31 +470,37 @@ fun ActionSelectionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Rappel pièce choisie
             Text(
-                text = roomTitle,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                text = displayRoomLabel(state.roomLabel),
+                style = MaterialTheme.typography.headlineSmall
             )
 
+            // Rappel objet choisi
             Text(
-                text = "Objet : $objectTitle",
+                text = displayObjectLabel(state.objectLabel),
                 style = MaterialTheme.typography.titleMedium
             )
 
+            // Titre action
             Text(
                 text = "Choisissez une action",
                 style = MaterialTheme.typography.titleMedium
             )
 
+            // Action reconnue
             RecognizedWordCard(
                 title = "Action reconnue",
-                value = if (state.actionLabel.isBlank()) "Aucune" else displayActionLabel(state.actionLabel),
+                value = if (state.actionLabel.isBlank()) "Aucune"
+                else displayActionLabel(state.actionLabel),
                 isSupported = mapActionLabel(state.actionLabel) != null || state.actionLabel.isBlank()
             )
 
+            // Liste des actions
             ACTION_OPTIONS.forEach { action ->
                 SelectableCard(
                     title = action.displayName,
+                    mappedName = action.mappedName,
                     subtitle = "Action disponible",
                     selected = state.actionLabel == action.rawLabel,
                     onClick = {
@@ -465,6 +510,7 @@ fun ActionSelectionScreen(
             }
         }
 
+        // Boutons du bas
         BottomButtonsRow(
             hasMicPermission = hasMicPermission,
             isListening = isListening,
@@ -502,13 +548,10 @@ fun BottomButtonsRow(
             .padding(top = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Bouton micro
         Button(
             onClick = {
-                if (hasMicPermission) {
-                    onRecognize()
-                } else {
-                    onAskPermission()
-                }
+                if (hasMicPermission) onRecognize() else onAskPermission()
             },
             modifier = Modifier.weight(1f)
         ) {
@@ -521,6 +564,7 @@ fun BottomButtonsRow(
             )
         }
 
+        // Bouton suivant / envoyer
         Button(
             onClick = onNext,
             enabled = nextEnabled,
@@ -549,14 +593,15 @@ fun RecognizedWordCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Titre du mot reconnu
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelLarge
             )
+            // Valeur reconnue
             Text(
                 text = value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                style = MaterialTheme.typography.titleLarge
             )
         }
     }
@@ -565,18 +610,20 @@ fun RecognizedWordCard(
 @Composable
 fun RoomCard(
     title: String,
-    objects: List<String>,
+    mappedName: String,
+    objects: List<UiOption>,
     selected: Boolean,
     onClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
+            .clickable { onClick() }, // clic manuel
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.outline
         ),
         colors = CardDefaults.cardColors(
             containerColor = if (selected) {
@@ -587,13 +634,17 @@ fun RoomCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Nom de la pièce
             Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                text = "$title ($mappedName)",
+                style = MaterialTheme.typography.titleLarge
             )
+
+            // Objets de la pièce
             Text(
-                text = "Objets : ${objects.joinToString(", ")}",
+                text = "Objets : " + objects.joinToString(", ") {
+                    "${it.displayName} (${it.mappedName})"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 8.dp)
             )
@@ -604,6 +655,7 @@ fun RoomCard(
 @Composable
 fun SelectableCard(
     title: String,
+    mappedName: String,
     subtitle: String,
     selected: Boolean,
     onClick: () -> Unit
@@ -611,11 +663,12 @@ fun SelectableCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() },
+            .clickable { onClick() }, // clic manuel
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.outline
         ),
         colors = CardDefaults.cardColors(
             containerColor = if (selected) {
@@ -626,11 +679,12 @@ fun SelectableCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Nom affiché
             Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                text = "$title ($mappedName)",
+                style = MaterialTheme.typography.titleLarge
             )
+            // Petit texte descriptif
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
@@ -640,18 +694,21 @@ fun SelectableCard(
     }
 }
 
+// Stocke la commande courante
 class VoiceCommandState {
     var roomLabel by mutableStateOf("")
     var objectLabel by mutableStateOf("")
     var actionLabel by mutableStateOf("")
 }
 
+// Labels bruts des modèles
 object Labels {
     val ROOMS = listOf("bed", "house", "tree", "marvin", "sheila")
     val OBJECTS = listOf("one", "two", "three", "four", "five")
     val ACTIONS = listOf("on", "off", "up", "down", "stop")
 }
 
+// Convertit label pièce -> valeur ESP32
 fun mapRoomLabel(label: String): String? = when (label) {
     "bed" -> "chambre"
     "house" -> "cuisine"
@@ -659,6 +716,7 @@ fun mapRoomLabel(label: String): String? = when (label) {
     else -> null
 }
 
+// Convertit label objet -> valeur ESP32
 fun mapObjectLabel(label: String): String? = when (label) {
     "one" -> "led1"
     "two" -> "led2"
@@ -666,31 +724,35 @@ fun mapObjectLabel(label: String): String? = when (label) {
     else -> null
 }
 
+// Convertit label action -> valeur ESP32
 fun mapActionLabel(label: String): String? = when (label) {
     "on" -> "on"
     "off" -> "off"
     else -> null
 }
 
+// Texte affiché pour les pièces
 fun displayRoomLabel(label: String): String = when (label) {
-    "bed" -> "Chambre"
-    "house" -> "Cuisine"
-    "marvin" -> "Salon"
+    "bed" -> "Bed (chambre)"
+    "house" -> "House (cuisine)"
+    "marvin" -> "Marvin (salon)"
     "" -> "Aucune"
     else -> "$label (non supporté)"
 }
 
+// Texte affiché pour les objets
 fun displayObjectLabel(label: String): String = when (label) {
-    "one", "led1" -> "led1"
-    "two", "led2" -> "led2"
-    "three", "led3" -> "led3"
+    "one", "led1" -> "One (led1)"
+    "two", "led2" -> "Two (led2)"
+    "three", "led3" -> "Three (led3)"
     "" -> "Aucun"
     else -> "$label (non supporté)"
 }
 
+// Texte affiché pour les actions
 fun displayActionLabel(label: String): String = when (label) {
-    "on" -> "ON"
-    "off" -> "OFF"
+    "on" -> "On (allumer)"
+    "off" -> "Off (éteindre)"
     "" -> "Aucune"
     else -> "$label (non supporté)"
 }
