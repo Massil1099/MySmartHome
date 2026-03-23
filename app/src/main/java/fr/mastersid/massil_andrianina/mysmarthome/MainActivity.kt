@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,13 +23,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -48,6 +40,9 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import java.util.Locale
+
+private const val MIN_CONFIDENCE = 0.8f
 
 // Option affichée dans l'interface
 data class UiOption(
@@ -81,7 +76,7 @@ private val ACTION_OPTIONS = listOf(
 private val ROOM_OPTIONS = listOf(
     RoomUiOption("marvin", "Marvin", "salon", LED_OPTIONS),
     RoomUiOption("house", "House", "cuisine", LED_OPTIONS),
-    RoomUiOption("bed", "Bed", "chambre", LED_OPTIONS)
+    RoomUiOption("tree", "Tree", "chambre", LED_OPTIONS)
 )
 
 class MainActivity : ComponentActivity() {
@@ -145,6 +140,10 @@ class MainActivity : ComponentActivity() {
                     requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
 
+                fun confText(value: Float): String {
+                    return String.format(Locale.US, "%.2f", value)
+                }
+
                 // Enregistre puis extrait les features
                 suspend fun recordAndExtractInput(): Array<Array<Array<FloatArray>>> {
                     val pcm = withContext(Dispatchers.Default) {
@@ -206,9 +205,9 @@ class MainActivity : ComponentActivity() {
                                 body
                             }
 
-                            status = "Réponse ESP32: $response"
+                            status = "Réponse ESP32 : $response"
                         } catch (e: Exception) {
-                            status = "Erreur ESP32: ${e.message}"
+                            status = "Erreur ESP32 : ${e.message}"
                         }
                     }
                 }
@@ -246,13 +245,25 @@ class MainActivity : ComponentActivity() {
                                     onAskPermission = { askMicPermission() },
                                     onRecognize = {
                                         val input = recordAndExtractInput()
-                                        state.roomLabel = detectorRoom.predictLabel(input)
+                                        val result = detectorRoom.predict(input, MIN_CONFIDENCE)
+
+                                        state.roomLabel = result.label ?: ""
                                         state.objectLabel = ""
                                         state.actionLabel = ""
-                                        status = "Pièce reconnue : ${displayRoomLabel(state.roomLabel)}"
+
+                                        status = when {
+                                            !result.recognized ->
+                                                "Pièce non reconnue (conf=${confText(result.confidence)})"
+
+                                            mapRoomLabel(state.roomLabel) == null ->
+                                                "Pièce reconnue mais non supportée : ${displayRoomLabel(state.roomLabel)} (conf=${confText(result.confidence)})"
+
+                                            else ->
+                                                "Pièce reconnue : ${displayRoomLabel(state.roomLabel)} (conf=${confText(result.confidence)})"
+                                        }
 
                                         // Passe automatiquement à l'écran suivant
-                                        if (mapRoomLabel(state.roomLabel) != null) {
+                                        if (result.recognized && mapRoomLabel(state.roomLabel) != null) {
                                             navController.navigate("object")
                                         }
                                     }
@@ -267,12 +278,24 @@ class MainActivity : ComponentActivity() {
                                     onAskPermission = { askMicPermission() },
                                     onRecognize = {
                                         val input = recordAndExtractInput()
-                                        state.objectLabel = detectorObject.predictLabel(input)
+                                        val result = detectorObject.predict(input, MIN_CONFIDENCE)
+
+                                        state.objectLabel = result.label ?: ""
                                         state.actionLabel = ""
-                                        status = "Objet reconnu : ${displayObjectLabel(state.objectLabel)}"
+
+                                        status = when {
+                                            !result.recognized ->
+                                                "Objet non reconnu (conf=${confText(result.confidence)})"
+
+                                            mapObjectLabel(state.objectLabel) == null ->
+                                                "Objet reconnu mais non supporté : ${displayObjectLabel(state.objectLabel)} (conf=${confText(result.confidence)})"
+
+                                            else ->
+                                                "Objet reconnu : ${displayObjectLabel(state.objectLabel)} (conf=${confText(result.confidence)})"
+                                        }
 
                                         // Passe automatiquement à l'écran suivant
-                                        if (mapObjectLabel(state.objectLabel) != null) {
+                                        if (result.recognized && mapObjectLabel(state.objectLabel) != null) {
                                             navController.navigate("action")
                                         }
                                     }
@@ -287,11 +310,23 @@ class MainActivity : ComponentActivity() {
                                     onAskPermission = { askMicPermission() },
                                     onRecognize = {
                                         val input = recordAndExtractInput()
-                                        state.actionLabel = detectorAction.predictLabel(input)
-                                        status = "Action reconnue : ${displayActionLabel(state.actionLabel)}"
+                                        val result = detectorAction.predict(input, MIN_CONFIDENCE)
+
+                                        state.actionLabel = result.label ?: ""
+
+                                        status = when {
+                                            !result.recognized ->
+                                                "Action non reconnue (conf=${confText(result.confidence)})"
+
+                                            mapActionLabel(state.actionLabel) == null ->
+                                                "Action reconnue mais non supportée : ${displayActionLabel(state.actionLabel)} (conf=${confText(result.confidence)})"
+
+                                            else ->
+                                                "Action reconnue : ${displayActionLabel(state.actionLabel)} (conf=${confText(result.confidence)})"
+                                        }
 
                                         // Envoie automatiquement la commande
-                                        if (mapActionLabel(state.actionLabel) != null) {
+                                        if (result.recognized && mapActionLabel(state.actionLabel) != null) {
                                             sendCommandToEsp32(
                                                 roomLabel = state.roomLabel,
                                                 objectLabel = state.objectLabel,
@@ -544,7 +579,6 @@ fun ListenButtonRow(
             .fillMaxWidth()
             .padding(top = 12.dp)
     ) {
-        // Seul bouton restant
         Button(
             onClick = {
                 if (hasMicPermission) onRecognize() else onAskPermission()
@@ -580,12 +614,10 @@ fun RecognizedWordCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Titre du mot reconnu
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelLarge
             )
-            // Valeur reconnue
             Text(
                 text = value,
                 style = MaterialTheme.typography.titleLarge
@@ -621,13 +653,11 @@ fun RoomCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Nom de la pièce
             Text(
                 text = "$title ($mappedName)",
                 style = MaterialTheme.typography.titleLarge
             )
 
-            // Objets de la pièce
             Text(
                 text = "Objets : " + objects.joinToString(", ") {
                     "${it.displayName} (${it.mappedName})"
@@ -666,12 +696,10 @@ fun SelectableCard(
         )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Nom affiché
             Text(
                 text = "$title ($mappedName)",
                 style = MaterialTheme.typography.titleLarge
             )
-            // Petit texte descriptif
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
@@ -697,7 +725,7 @@ object Labels {
 
 // Convertit label pièce -> valeur ESP32
 fun mapRoomLabel(label: String): String? = when (label) {
-    "bed" -> "chambre"
+    "tree" -> "chambre"
     "house" -> "cuisine"
     "marvin" -> "salon"
     else -> null
@@ -720,7 +748,7 @@ fun mapActionLabel(label: String): String? = when (label) {
 
 // Texte affiché pour les pièces
 fun displayRoomLabel(label: String): String = when (label) {
-    "bed" -> "Bed (chambre)"
+    "tree" -> "Tree (chambre)"
     "house" -> "House (cuisine)"
     "marvin" -> "Marvin (salon)"
     "" -> "Aucune"
