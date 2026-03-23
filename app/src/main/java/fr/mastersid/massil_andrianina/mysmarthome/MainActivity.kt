@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -25,24 +26,24 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import fr.mastersid.massil_andrianina.mysmarthome.data.model.TFLiteKeywordDetector
+import fr.mastersid.massil_andrianina.mysmarthome.network.Esp32HttpClient
 import fr.mastersid.massil_andrianina.mysmarthome.ui.theme.MySmartHomeTheme
 import fr.mastersid.massil_andrianina.mysmarthome.voice.AudioRecorder
 import fr.mastersid.massil_andrianina.mysmarthome.voice.StftLogFeatureExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URLEncoder
-import java.net.URL
 import java.util.Locale
 
-private const val MIN_CONFIDENCE = 0.8f
+// Seuil minimal de confiance pour accepter un mot reconnu
+private const val MIN_CONFIDENCE = 0.6f
 
 // Option affichée dans l'interface
 data class UiOption(
@@ -51,7 +52,7 @@ data class UiOption(
     val mappedName: String
 )
 
-// Pièce + objets affichés
+// Structure d'une pièce avec les objets disponibles dedans
 data class RoomUiOption(
     val rawLabel: String,
     val displayName: String,
@@ -81,10 +82,10 @@ private val ROOM_OPTIONS = listOf(
 
 class MainActivity : ComponentActivity() {
 
-    // État permission micro
+    // État de permission micro
     private var micPermissionGranted by mutableStateOf(false)
 
-    // Demande permission micro
+    // Demande de permission micro
     private val requestMicPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -94,28 +95,28 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Vérifie la permission au lancement
+        // Vérification initiale de la permission
         micPermissionGranted = checkMicPermission()
 
-        // Audio + extraction
+        // Outils audio
         val recorder = AudioRecorder(16000)
         val extractor = StftLogFeatureExtractor()
 
-        // Modèle pièce
+        // Détecteur pour les pièces
         val detectorRoom = TFLiteKeywordDetector(
             context = this,
             modelName = "rooms_model_pruned_int8.tflite",
             labels = Labels.ROOMS
         )
 
-        // Modèle objet
+        // Détecteur pour les objets
         val detectorObject = TFLiteKeywordDetector(
             context = this,
             modelName = "objects_model_pruned_int8.tflite",
             labels = Labels.OBJECTS
         )
 
-        // Modèle action
+        // Détecteur pour les actions
         val detectorAction = TFLiteKeywordDetector(
             context = this,
             modelName = "actions_model_pruned_int8.tflite",
@@ -127,24 +128,35 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val scope = rememberCoroutineScope()
 
-                // IP et statut
+                // IP de l'ESP32
                 var ip by remember { mutableStateOf("192.168.4.1") }
+
+                // Message affiché dans l'UI
                 var status by remember { mutableStateOf("Prêt") }
 
-                // État global de la commande
+                // État de connexion à l'ESP32
+                var isEspConnected by remember { mutableStateOf(false) }
+
+                // État de vérification de connexion
+                var isCheckingConnection by remember { mutableStateOf(false) }
+
+                // État global de la commande vocale
                 val state = remember { VoiceCommandState() }
+
+                // Permission micro actuelle
                 val hasMicPermission = micPermissionGranted
 
-                // Demande permission
+                // Lance la demande de permission micro
                 fun askMicPermission() {
                     requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
 
+                // Formate une confiance sur 2 décimales
                 fun confText(value: Float): String {
                     return String.format(Locale.US, "%.2f", value)
                 }
 
-                // Enregistre puis extrait les features
+                // Enregistre 1 seconde puis extrait les features audio
                 suspend fun recordAndExtractInput(): Array<Array<Array<FloatArray>>> {
                     val pcm = withContext(Dispatchers.Default) {
                         recorder.recordOneSecondPcm16()
@@ -157,58 +169,73 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Envoi HTTP à l'ESP32
+                // Vérifie automatiquement si l'ESP32 est joignable
+                fun checkEsp32Connection() {
+                    scope.launch {
+                        isCheckingConnection = true
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                Esp32HttpClient.checkConnection(ip)
+                            }
+
+                            if (result.isSuccess) {
+                                isEspConnected = true
+                                status = result.getOrNull() ?: "ESP32 connecté"
+                            } else {
+                                isEspConnected = false
+                                status = "ESP32 non connecté"
+                            }
+                        } finally {
+                            isCheckingConnection = false
+                        }
+                    }
+                }
+
+                // Envoie la commande finale à l'ESP32
                 fun sendCommandToEsp32(
                     roomLabel: String,
                     objectLabel: String,
                     actionLabel: String
                 ) {
                     scope.launch {
-                        try {
-                            val room = mapRoomLabel(roomLabel)
-                            val obj = mapObjectLabel(objectLabel)
-                            val action = mapActionLabel(actionLabel)
+                        val room = mapRoomLabel(roomLabel)
+                        val obj = mapObjectLabel(objectLabel)
+                        val action = mapActionLabel(actionLabel)
 
-                            // Vérifie la commande
-                            if (room == null || obj == null || action == null) {
-                                status = "Commande incomplète ou invalide"
-                                return@launch
-                            }
-
-                            // Encode l'URL
-                            val encodedRoom = URLEncoder.encode(room, "UTF-8")
-                            val encodedObject = URLEncoder.encode(obj, "UTF-8")
-                            val encodedAction = URLEncoder.encode(action, "UTF-8")
-
-                            val url =
-                                "http://$ip/cmd?room=$encodedRoom&object=$encodedObject&action=$encodedAction"
-
-                            status = "Envoi..."
-
-                            // Requête GET
-                            val response = withContext(Dispatchers.IO) {
-                                val conn = URL(url).openConnection() as HttpURLConnection
-                                conn.connectTimeout = 4000
-                                conn.readTimeout = 4000
-                                conn.requestMethod = "GET"
-
-                                val stream = try {
-                                    conn.inputStream
-                                } catch (_: Exception) {
-                                    conn.errorStream
-                                }
-
-                                val body = stream?.bufferedReader()?.use { it.readText() }
-                                    ?: "Aucune réponse"
-
-                                conn.disconnect()
-                                body
-                            }
-
-                            status = "Réponse ESP32 : $response"
-                        } catch (e: Exception) {
-                            status = "Erreur ESP32 : ${e.message}"
+                        // Vérifie que tout est bien mappé
+                        if (room == null || obj == null || action == null) {
+                            status = "Commande incomplète ou invalide"
+                            return@launch
                         }
+
+                        status = "Envoi..."
+
+                        val result = withContext(Dispatchers.IO) {
+                            Esp32HttpClient.sendCommand(
+                                ip = ip,
+                                room = room,
+                                obj = obj,
+                                action = action
+                            )
+                        }
+
+                        if (result.isSuccess) {
+                            status = "Réponse ESP32 : ${result.getOrNull()}"
+                            isEspConnected = true
+                        } else {
+                            status = "Erreur ESP32 : ${result.exceptionOrNull()?.message}"
+                            isEspConnected = false
+                        }
+                    }
+                }
+
+                // Vérifie automatiquement la connexion lorsque l'IP change
+                LaunchedEffect(ip) {
+                    if (ip.isNotBlank()) {
+                        checkEsp32Connection()
+                    } else {
+                        isEspConnected = false
+                        status = "IP vide"
                     }
                 }
 
@@ -220,7 +247,7 @@ class MainActivity : ComponentActivity() {
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Champ IP
+                        // Champ d'édition de l'IP
                         OutlinedTextField(
                             value = ip,
                             onValueChange = { ip = it },
@@ -228,8 +255,27 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        // Texte d'état
+                        // Statut global
                         Text("Statut : $status")
+
+                        // Message de connexion
+                        if (!isEspConnected) {
+                            Text(
+                                text = if (isCheckingConnection) {
+                                    "Vérification de la connexion à l'ESP32..."
+                                } else {
+                                    "ESP32 non connecté"
+                                },
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        } else {
+                            Text(
+                                text = "ESP32 connecté",
+                                color = Color(0xFF2E7D32),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
 
                         // Navigation entre les 3 écrans
                         NavHost(
@@ -237,11 +283,12 @@ class MainActivity : ComponentActivity() {
                             startDestination = "room",
                             modifier = Modifier.weight(1f)
                         ) {
-                            // Écran pièce
+                            // Écran de choix de la pièce
                             composable("room") {
                                 RoomSelectionScreen(
                                     state = state,
                                     hasMicPermission = hasMicPermission,
+                                    isEspConnected = isEspConnected,
                                     onAskPermission = { askMicPermission() },
                                     onRecognize = {
                                         val input = recordAndExtractInput()
@@ -262,7 +309,7 @@ class MainActivity : ComponentActivity() {
                                                 "Pièce reconnue : ${displayRoomLabel(state.roomLabel)} (conf=${confText(result.confidence)})"
                                         }
 
-                                        // Passe automatiquement à l'écran suivant
+                                        // Navigation auto vers l'écran objet si la pièce est valide
                                         if (result.recognized && mapRoomLabel(state.roomLabel) != null) {
                                             navController.navigate("object")
                                         }
@@ -270,11 +317,12 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // Écran objet
+                            // Écran de choix de l'objet
                             composable("object") {
                                 ObjectSelectionScreen(
                                     state = state,
                                     hasMicPermission = hasMicPermission,
+                                    isEspConnected = isEspConnected,
                                     onAskPermission = { askMicPermission() },
                                     onRecognize = {
                                         val input = recordAndExtractInput()
@@ -294,7 +342,7 @@ class MainActivity : ComponentActivity() {
                                                 "Objet reconnu : ${displayObjectLabel(state.objectLabel)} (conf=${confText(result.confidence)})"
                                         }
 
-                                        // Passe automatiquement à l'écran suivant
+                                        // Navigation auto vers l'écran action si l'objet est valide
                                         if (result.recognized && mapObjectLabel(state.objectLabel) != null) {
                                             navController.navigate("action")
                                         }
@@ -302,11 +350,12 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            // Écran action
+                            // Écran de choix de l'action
                             composable("action") {
                                 ActionSelectionScreen(
                                     state = state,
                                     hasMicPermission = hasMicPermission,
+                                    isEspConnected = isEspConnected,
                                     onAskPermission = { askMicPermission() },
                                     onRecognize = {
                                         val input = recordAndExtractInput()
@@ -325,7 +374,7 @@ class MainActivity : ComponentActivity() {
                                                 "Action reconnue : ${displayActionLabel(state.actionLabel)} (conf=${confText(result.confidence)})"
                                         }
 
-                                        // Envoie automatiquement la commande
+                                        // Envoi auto à l'ESP32 si l'action est valide
                                         if (result.recognized && mapActionLabel(state.actionLabel) != null) {
                                             sendCommandToEsp32(
                                                 roomLabel = state.roomLabel,
@@ -343,7 +392,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Vérifie permission micro
+    // Vérifie si la permission micro est accordée
     private fun checkMicPermission(): Boolean {
         return ContextCompat.checkSelfPermission(
             this,
@@ -356,6 +405,7 @@ class MainActivity : ComponentActivity() {
 fun RoomSelectionScreen(
     state: VoiceCommandState,
     hasMicPermission: Boolean,
+    isEspConnected: Boolean,
     onAskPermission: () -> Unit,
     onRecognize: suspend () -> Unit
 ) {
@@ -369,13 +419,13 @@ fun RoomSelectionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Titre écran 1
+            // Titre de l'écran
             Text(
                 text = "Choisissez une pièce",
                 style = MaterialTheme.typography.headlineSmall
             )
 
-            // Mot reconnu
+            // Carte affichant la pièce reconnue
             RecognizedWordCard(
                 title = "Pièce reconnue",
                 value = if (state.roomLabel.isBlank()) "Aucune"
@@ -383,7 +433,7 @@ fun RoomSelectionScreen(
                 isSupported = mapRoomLabel(state.roomLabel) != null || state.roomLabel.isBlank()
             )
 
-            // Liste des pièces
+            // Cartes de sélection manuelle des pièces
             ROOM_OPTIONS.forEach { room ->
                 RoomCard(
                     title = room.displayName,
@@ -399,9 +449,10 @@ fun RoomSelectionScreen(
             }
         }
 
-        // Bouton parler
+        // Bouton de lancement de l'écoute
         ListenButtonRow(
             hasMicPermission = hasMicPermission,
+            isEspConnected = isEspConnected,
             isListening = isListening,
             onAskPermission = onAskPermission,
             onRecognize = {
@@ -422,6 +473,7 @@ fun RoomSelectionScreen(
 fun ObjectSelectionScreen(
     state: VoiceCommandState,
     hasMicPermission: Boolean,
+    isEspConnected: Boolean,
     onAskPermission: () -> Unit,
     onRecognize: suspend () -> Unit
 ) {
@@ -436,20 +488,20 @@ fun ObjectSelectionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Titre avec pièce choisie
+            // Rappel de la pièce choisie
             Text(
                 text = selectedRoom?.let { "${it.displayName} (${it.mappedName})" }
                     ?: "Pièce non sélectionnée",
                 style = MaterialTheme.typography.headlineSmall
             )
 
-            // Sous-titre
+            // Titre de l'écran
             Text(
                 text = "Choisissez un objet",
                 style = MaterialTheme.typography.titleMedium
             )
 
-            // Objet reconnu
+            // Carte affichant l'objet reconnu
             RecognizedWordCard(
                 title = "Objet reconnu",
                 value = if (state.objectLabel.isBlank()) "Aucun"
@@ -457,7 +509,7 @@ fun ObjectSelectionScreen(
                 isSupported = mapObjectLabel(state.objectLabel) != null || state.objectLabel.isBlank()
             )
 
-            // Liste des objets
+            // Cartes de sélection manuelle des objets
             (selectedRoom?.objects ?: LED_OPTIONS).forEach { obj ->
                 SelectableCard(
                     title = obj.displayName,
@@ -472,9 +524,10 @@ fun ObjectSelectionScreen(
             }
         }
 
-        // Bouton parler
+        // Bouton de lancement de l'écoute
         ListenButtonRow(
             hasMicPermission = hasMicPermission,
+            isEspConnected = isEspConnected,
             isListening = isListening,
             onAskPermission = onAskPermission,
             onRecognize = {
@@ -495,6 +548,7 @@ fun ObjectSelectionScreen(
 fun ActionSelectionScreen(
     state: VoiceCommandState,
     hasMicPermission: Boolean,
+    isEspConnected: Boolean,
     onAskPermission: () -> Unit,
     onRecognize: suspend () -> Unit
 ) {
@@ -508,25 +562,25 @@ fun ActionSelectionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Rappel pièce choisie
+            // Rappel de la pièce choisie
             Text(
                 text = displayRoomLabel(state.roomLabel),
                 style = MaterialTheme.typography.headlineSmall
             )
 
-            // Rappel objet choisi
+            // Rappel de l'objet choisi
             Text(
                 text = displayObjectLabel(state.objectLabel),
                 style = MaterialTheme.typography.titleMedium
             )
 
-            // Titre action
+            // Titre de l'écran
             Text(
                 text = "Choisissez une action",
                 style = MaterialTheme.typography.titleMedium
             )
 
-            // Action reconnue
+            // Carte affichant l'action reconnue
             RecognizedWordCard(
                 title = "Action reconnue",
                 value = if (state.actionLabel.isBlank()) "Aucune"
@@ -534,7 +588,7 @@ fun ActionSelectionScreen(
                 isSupported = mapActionLabel(state.actionLabel) != null || state.actionLabel.isBlank()
             )
 
-            // Liste des actions
+            // Cartes de sélection manuelle des actions
             ACTION_OPTIONS.forEach { action ->
                 SelectableCard(
                     title = action.displayName,
@@ -548,9 +602,10 @@ fun ActionSelectionScreen(
             }
         }
 
-        // Bouton parler
+        // Bouton de lancement de l'écoute
         ListenButtonRow(
             hasMicPermission = hasMicPermission,
+            isEspConnected = isEspConnected,
             isListening = isListening,
             onAskPermission = onAskPermission,
             onRecognize = {
@@ -570,10 +625,15 @@ fun ActionSelectionScreen(
 @Composable
 fun ListenButtonRow(
     hasMicPermission: Boolean,
+    isEspConnected: Boolean,
     isListening: Boolean,
     onAskPermission: () -> Unit,
     onRecognize: () -> Unit
 ) {
+    // Le bouton est désactivé si l'ESP32 n'est pas connecté
+    // ou si une écoute est déjà en cours
+    val enabled = isEspConnected && !isListening
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -581,12 +641,22 @@ fun ListenButtonRow(
     ) {
         Button(
             onClick = {
-                if (hasMicPermission) onRecognize() else onAskPermission()
+                if (hasMicPermission) {
+                    onRecognize()
+                } else {
+                    onAskPermission()
+                }
             },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            enabled = enabled,
+            colors = ButtonDefaults.buttonColors(
+                disabledContainerColor = MaterialTheme.colorScheme.errorContainer,
+                disabledContentColor = MaterialTheme.colorScheme.onErrorContainer
+            )
         ) {
             Text(
                 when {
+                    !isEspConnected -> "ESP32 not connected"
                     !hasMicPermission -> "Autoriser micro"
                     isListening -> "Écoute..."
                     else -> "Parler"
@@ -709,7 +779,7 @@ fun SelectableCard(
     }
 }
 
-// Stocke la commande courante
+// État global de la commande en cours
 class VoiceCommandState {
     var roomLabel by mutableStateOf("")
     var objectLabel by mutableStateOf("")
@@ -723,7 +793,7 @@ object Labels {
     val ACTIONS = listOf("on", "off", "up", "down", "stop")
 }
 
-// Convertit label pièce -> valeur ESP32
+// Convertit un label de pièce vers la valeur attendue par l'ESP32
 fun mapRoomLabel(label: String): String? = when (label) {
     "tree" -> "chambre"
     "house" -> "cuisine"
@@ -731,7 +801,7 @@ fun mapRoomLabel(label: String): String? = when (label) {
     else -> null
 }
 
-// Convertit label objet -> valeur ESP32
+// Convertit un label d'objet vers la valeur attendue par l'ESP32
 fun mapObjectLabel(label: String): String? = when (label) {
     "one" -> "led1"
     "two" -> "led2"
@@ -739,7 +809,7 @@ fun mapObjectLabel(label: String): String? = when (label) {
     else -> null
 }
 
-// Convertit label action -> valeur ESP32
+// Convertit un label d'action vers la valeur attendue par l'ESP32
 fun mapActionLabel(label: String): String? = when (label) {
     "on" -> "on"
     "off" -> "off"

@@ -23,7 +23,7 @@ class TFLiteKeywordDetector(
 ) {
 
     companion object {
-        private const val DEFAULT_THRESHOLD = 0.8f
+        private const val DEFAULT_THRESHOLD = 0.6f
     }
 
     private val interpreter: Interpreter
