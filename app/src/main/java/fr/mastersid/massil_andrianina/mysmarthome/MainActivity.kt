@@ -8,7 +8,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -19,9 +24,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
@@ -38,14 +49,14 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 
-// Option générique affichée dans l'interface
+// Option affichée dans l'interface
 data class UiOption(
     val rawLabel: String,
     val displayName: String,
     val mappedName: String
 )
 
-// Option de pièce avec ses objets
+// Pièce + objets affichés
 data class RoomUiOption(
     val rawLabel: String,
     val displayName: String,
@@ -91,7 +102,7 @@ class MainActivity : ComponentActivity() {
         // Vérifie la permission au lancement
         micPermissionGranted = checkMicPermission()
 
-        // Audio + extraction features
+        // Audio + extraction
         val recorder = AudioRecorder(16000)
         val extractor = StftLogFeatureExtractor()
 
@@ -118,11 +129,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MySmartHomeTheme {
-                // Contrôle navigation
                 val navController = rememberNavController()
                 val scope = rememberCoroutineScope()
 
-                // IP ESP32 et texte d'état
+                // IP et statut
                 var ip by remember { mutableStateOf("192.168.4.1") }
                 var status by remember { mutableStateOf("Prêt") }
 
@@ -130,12 +140,12 @@ class MainActivity : ComponentActivity() {
                 val state = remember { VoiceCommandState() }
                 val hasMicPermission = micPermissionGranted
 
-                // Lance la demande permission
+                // Demande permission
                 fun askMicPermission() {
                     requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
                 }
 
-                // Enregistre puis extrait les features audio
+                // Enregistre puis extrait les features
                 suspend fun recordAndExtractInput(): Array<Array<Array<FloatArray>>> {
                     val pcm = withContext(Dispatchers.Default) {
                         recorder.recordOneSecondPcm16()
@@ -148,7 +158,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Envoie la commande HTTP à l'ESP32
+                // Envoi HTTP à l'ESP32
                 fun sendCommandToEsp32(
                     roomLabel: String,
                     objectLabel: String,
@@ -156,36 +166,33 @@ class MainActivity : ComponentActivity() {
                 ) {
                     scope.launch {
                         try {
-                            // Convertit labels -> valeurs utiles
                             val room = mapRoomLabel(roomLabel)
                             val obj = mapObjectLabel(objectLabel)
                             val action = mapActionLabel(actionLabel)
 
-                            // Vérifie commande complète
+                            // Vérifie la commande
                             if (room == null || obj == null || action == null) {
                                 status = "Commande incomplète ou invalide"
                                 return@launch
                             }
 
-                            // Encode les paramètres URL
+                            // Encode l'URL
                             val encodedRoom = URLEncoder.encode(room, "UTF-8")
                             val encodedObject = URLEncoder.encode(obj, "UTF-8")
                             val encodedAction = URLEncoder.encode(action, "UTF-8")
 
-                            // URL finale
                             val url =
                                 "http://$ip/cmd?room=$encodedRoom&object=$encodedObject&action=$encodedAction"
 
                             status = "Envoi..."
 
-                            // Requête HTTP GET
+                            // Requête GET
                             val response = withContext(Dispatchers.IO) {
                                 val conn = URL(url).openConnection() as HttpURLConnection
                                 conn.connectTimeout = 4000
                                 conn.readTimeout = 4000
                                 conn.requestMethod = "GET"
 
-                                // Lit réponse normale ou erreur
                                 val stream = try {
                                     conn.inputStream
                                 } catch (_: Exception) {
@@ -206,7 +213,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Structure générale de l'écran
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     Column(
                         modifier = Modifier
@@ -226,7 +232,7 @@ class MainActivity : ComponentActivity() {
                         // Texte d'état
                         Text("Statut : $status")
 
-                        // Navigation entre les 3 pages
+                        // Navigation entre les 3 écrans
                         NavHost(
                             navController = navController,
                             startDestination = "room",
@@ -244,9 +250,11 @@ class MainActivity : ComponentActivity() {
                                         state.objectLabel = ""
                                         state.actionLabel = ""
                                         status = "Pièce reconnue : ${displayRoomLabel(state.roomLabel)}"
-                                    },
-                                    onNext = {
-                                        navController.navigate("object")
+
+                                        // Passe automatiquement à l'écran suivant
+                                        if (mapRoomLabel(state.roomLabel) != null) {
+                                            navController.navigate("object")
+                                        }
                                     }
                                 )
                             }
@@ -262,9 +270,11 @@ class MainActivity : ComponentActivity() {
                                         state.objectLabel = detectorObject.predictLabel(input)
                                         state.actionLabel = ""
                                         status = "Objet reconnu : ${displayObjectLabel(state.objectLabel)}"
-                                    },
-                                    onNext = {
-                                        navController.navigate("action")
+
+                                        // Passe automatiquement à l'écran suivant
+                                        if (mapObjectLabel(state.objectLabel) != null) {
+                                            navController.navigate("action")
+                                        }
                                     }
                                 )
                             }
@@ -279,13 +289,15 @@ class MainActivity : ComponentActivity() {
                                         val input = recordAndExtractInput()
                                         state.actionLabel = detectorAction.predictLabel(input)
                                         status = "Action reconnue : ${displayActionLabel(state.actionLabel)}"
-                                    },
-                                    onSend = {
-                                        sendCommandToEsp32(
-                                            roomLabel = state.roomLabel,
-                                            objectLabel = state.objectLabel,
-                                            actionLabel = state.actionLabel
-                                        )
+
+                                        // Envoie automatiquement la commande
+                                        if (mapActionLabel(state.actionLabel) != null) {
+                                            sendCommandToEsp32(
+                                                roomLabel = state.roomLabel,
+                                                objectLabel = state.objectLabel,
+                                                actionLabel = state.actionLabel
+                                            )
+                                        }
                                     }
                                 )
                             }
@@ -310,8 +322,7 @@ fun RoomSelectionScreen(
     state: VoiceCommandState,
     hasMicPermission: Boolean,
     onAskPermission: () -> Unit,
-    onRecognize: suspend () -> Unit,
-    onNext: () -> Unit
+    onRecognize: suspend () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var isListening by remember { mutableStateOf(false) }
@@ -353,12 +364,10 @@ fun RoomSelectionScreen(
             }
         }
 
-        // Boutons du bas
-        BottomButtonsRow(
+        // Bouton parler
+        ListenButtonRow(
             hasMicPermission = hasMicPermission,
             isListening = isListening,
-            nextLabel = "Suivant",
-            nextEnabled = mapRoomLabel(state.roomLabel) != null,
             onAskPermission = onAskPermission,
             onRecognize = {
                 scope.launch {
@@ -369,8 +378,7 @@ fun RoomSelectionScreen(
                         isListening = false
                     }
                 }
-            },
-            onNext = onNext
+            }
         )
     }
 }
@@ -380,8 +388,7 @@ fun ObjectSelectionScreen(
     state: VoiceCommandState,
     hasMicPermission: Boolean,
     onAskPermission: () -> Unit,
-    onRecognize: suspend () -> Unit,
-    onNext: () -> Unit
+    onRecognize: suspend () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var isListening by remember { mutableStateOf(false) }
@@ -430,12 +437,10 @@ fun ObjectSelectionScreen(
             }
         }
 
-        // Boutons du bas
-        BottomButtonsRow(
+        // Bouton parler
+        ListenButtonRow(
             hasMicPermission = hasMicPermission,
             isListening = isListening,
-            nextLabel = "Suivant",
-            nextEnabled = mapObjectLabel(state.objectLabel) != null,
             onAskPermission = onAskPermission,
             onRecognize = {
                 scope.launch {
@@ -446,8 +451,7 @@ fun ObjectSelectionScreen(
                         isListening = false
                     }
                 }
-            },
-            onNext = onNext
+            }
         )
     }
 }
@@ -457,8 +461,7 @@ fun ActionSelectionScreen(
     state: VoiceCommandState,
     hasMicPermission: Boolean,
     onAskPermission: () -> Unit,
-    onRecognize: suspend () -> Unit,
-    onSend: () -> Unit
+    onRecognize: suspend () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var isListening by remember { mutableStateOf(false) }
@@ -510,12 +513,10 @@ fun ActionSelectionScreen(
             }
         }
 
-        // Boutons du bas
-        BottomButtonsRow(
+        // Bouton parler
+        ListenButtonRow(
             hasMicPermission = hasMicPermission,
             isListening = isListening,
-            nextLabel = "Envoyer",
-            nextEnabled = mapActionLabel(state.actionLabel) != null,
             onAskPermission = onAskPermission,
             onRecognize = {
                 scope.launch {
@@ -526,34 +527,29 @@ fun ActionSelectionScreen(
                         isListening = false
                     }
                 }
-            },
-            onNext = onSend
+            }
         )
     }
 }
 
 @Composable
-fun BottomButtonsRow(
+fun ListenButtonRow(
     hasMicPermission: Boolean,
     isListening: Boolean,
-    nextLabel: String,
-    nextEnabled: Boolean,
     onAskPermission: () -> Unit,
-    onRecognize: () -> Unit,
-    onNext: () -> Unit
+    onRecognize: () -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(top = 12.dp)
     ) {
-        // Bouton micro
+        // Seul bouton restant
         Button(
             onClick = {
                 if (hasMicPermission) onRecognize() else onAskPermission()
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 when {
@@ -562,15 +558,6 @@ fun BottomButtonsRow(
                     else -> "Parler"
                 }
             )
-        }
-
-        // Bouton suivant / envoyer
-        Button(
-            onClick = onNext,
-            enabled = nextEnabled,
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(nextLabel)
         }
     }
 }
@@ -618,7 +605,7 @@ fun RoomCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }, // clic manuel
+            .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
@@ -663,7 +650,7 @@ fun SelectableCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }, // clic manuel
+            .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = if (selected) 2.dp else 1.dp,
